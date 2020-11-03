@@ -1,12 +1,19 @@
 package berlin.beuth.gpstrackersinglepage;
 
 import android.Manifest;
+import android.content.Context;
 import android.content.pm.PackageManager;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
 import android.location.Address;
 import android.location.Geocoder;
 import android.location.Location;
+import android.location.LocationManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.util.Log;
 import android.view.View;
 import android.widget.Switch;
 import android.widget.TextView;
@@ -18,13 +25,11 @@ import com.google.android.gms.location.LocationRequest;
 import com.google.android.gms.location.LocationResult;
 import com.google.android.gms.location.LocationServices;
 import com.google.android.gms.tasks.OnSuccessListener;
-import com.google.android.material.bottomnavigation.BottomNavigationView;
 
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.core.app.ActivityCompat;
 
-import java.io.Console;
 import java.util.List;
 
 
@@ -33,12 +38,39 @@ public class MainActivity extends AppCompatActivity {
     public static final int DEFAULT_UPDATE_INTERVAL = 30;
     public static final int FASTEST_UPDATE_INTERVAL = 5;
     private static final int PERMISSION_FINE_LOCATION = 99;
-    TextView tv_lat, tv_lon, tv_altitude, tv_accuracy, tv_speed, tv_sensor, tv_updates, tv_address;
+    private TextView tv_lat, tv_lon, tv_altitude, tv_accuracy, tv_speed, tv_sensor, tv_updates, tv_address, tv_mbar, tv_altitudeFromMbar, tv_calibratingMbar;
+    private SensorManager sensoreManager;
+    private Sensor pressureSensor;
+
+
+    private SensorEventListener sensorEventListener = new SensorEventListener() {
+        @Override
+        public void onSensorChanged(SensorEvent event) {
+            float[] values = event.values;
+            double mbar = values[0];
+
+            double resultAltituteFromMBar;
+
+            double calibratingMbar = 0;
+
+            calibratingMbar = Double.valueOf(String.valueOf(tv_calibratingMbar.getText()));
+
+            Log.d("test","aH: " + tv_calibratingMbar.getText());
+
+            // Formel aus den Vorlesungsmaterial
+            resultAltituteFromMBar = (288.15/0.0065)*( 1-(Math.pow( ((mbar+calibratingMbar) / 1013.25), 1/5.255 )));
+
+            tv_mbar.setText(String.valueOf(values[0]));
+            tv_altitudeFromMbar.setText(String.valueOf(resultAltituteFromMBar));
+        }
+
+        @Override
+        public void onAccuracyChanged(Sensor sensor, int accuracy) {
+
+        }
+    };
 
     Switch sw_locationsupdates, sw_gps;
-
-    // variable ob location getrackt werden soll, oder nicht
-    boolean updateOn = false;
 
     // Google Location Service API - installiert über dependencies in der gradle datei
     FusedLocationProviderClient fusedLocationProviderClient;
@@ -48,6 +80,9 @@ public class MainActivity extends AppCompatActivity {
 
     // LocationCallBack
     LocationCallback locationCallBack;
+
+    // LocationManager
+    LocationManager locationManager;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -63,10 +98,12 @@ public class MainActivity extends AppCompatActivity {
         tv_sensor = (TextView) findViewById(R.id.tv_sensor);
         tv_updates = (TextView) findViewById(R.id.tv_updates);
         tv_address = (TextView) findViewById(R.id.tv_address);
+        tv_mbar = (TextView)findViewById(R.id.txtmBar);
+        tv_calibratingMbar = (TextView) findViewById(R.id.txtActualHeight);
+        tv_altitudeFromMbar = (TextView)findViewById(R.id.txtAltFromMbar);
         sw_locationsupdates = (Switch) findViewById(R.id.sw_locationsupdates);
         sw_gps = (Switch) findViewById(R.id.sw_gps);
 
-        Boolean switchState = sw_gps.isChecked();
 
         // eigenschaften für LocationRequest
         locationRequest = new LocationRequest();
@@ -80,7 +117,7 @@ public class MainActivity extends AppCompatActivity {
         // Batterie-Nutzung anhand der prio
         locationRequest.setPriority(LocationRequest.PRIORITY_BALANCED_POWER_ACCURACY);
 
-
+        // LocationCallBack
         locationCallBack = new LocationCallback() {
 
             @Override
@@ -91,6 +128,46 @@ public class MainActivity extends AppCompatActivity {
             }
         };
 
+        // SensorManager
+        sensoreManager = (SensorManager) getSystemService(SENSOR_SERVICE);
+
+        // PressureSensor
+        pressureSensor = sensoreManager.getDefaultSensor(Sensor.TYPE_PRESSURE);
+
+        // LocationListener
+        locationManager = (LocationManager) this.getSystemService(Context.LOCATION_SERVICE);
+
+        // Register the listener with the Location Manager to receive location updates
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_FINE_LOCATION) != PackageManager.PERMISSION_GRANTED && ActivityCompat.checkSelfPermission(this, Manifest.permission.ACCESS_COARSE_LOCATION) != PackageManager.PERMISSION_GRANTED) {
+            // TODO: Consider calling
+            //    ActivityCompat#requestPermissions
+            // here to request the missing permissions, and then overriding
+            //   public void onRequestPermissionsResult(int requestCode, String[] permissions,
+            //                                          int[] grantResults)
+            // to handle the case where the user grants the permission. See the documentation
+            // for ActivityCompat#requestPermissions for more details.
+            return;
+        }
+
+//        //locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 0, 0, (LocationListener) this);
+//
+//        // Acquire a reference to the system Location Manager
+//        LocationManager locationManager = (LocationManager) this.getSystemService(Context.LOCATION_SERVICE);
+//
+//        // Define a listener that responds to location updates
+//        LocationListener locationListener = new LocationListener() {
+//            public void onLocationChanged(Location location) {
+//                // Called when a new location is found by the network location provider.
+//                makeUseOfNewLocation(location);
+//            }
+//            public void onStatusChanged(String provider, int status, Bundle extras) {}
+//            public void onProviderEnabled(String provider) {}
+//            public void onProviderDisabled(String provider) {}
+//        };
+//
+//        // Register the listener with the Location Manager to receive location updates
+//        locationManager.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 0, 0, locationListener);
+
         // ActionBar deaktivieren
         getSupportActionBar().hide();
 
@@ -98,14 +175,14 @@ public class MainActivity extends AppCompatActivity {
             @Override
             public void onClick(View v) {
                 if (sw_gps.isChecked()) {
-                    // am genausten - benutzt das GPS
+                    // am genausten - benutzt das GPS - höchster verbrauch
                     locationRequest.setPriority(LocationRequest.PRIORITY_HIGH_ACCURACY);
                     tv_sensor.setText("Using GPS sensors");
-                    ;
+
                 } else {
                     locationRequest.setPriority(LocationRequest.PRIORITY_BALANCED_POWER_ACCURACY);
                     tv_sensor.setText("Using Towers + WiFi");
-                    ;
+
                 }
             }
         });
@@ -120,9 +197,45 @@ public class MainActivity extends AppCompatActivity {
                 }
             }
         });
+        
 
         updateGPS();
     } // ende der onCreate methode
+
+    protected void onResume() {
+        super.onResume();
+        sensoreManager.registerListener(sensorEventListener, pressureSensor, SensorManager.SENSOR_DELAY_UI);
+        Log.d("MainActivity","@Resume");
+        Toast.makeText(this, "The app is now resuming", Toast.LENGTH_LONG).show();
+
+
+    }
+
+    protected void onPause() {
+        super.onPause();
+        sensoreManager.unregisterListener(sensorEventListener);
+        Log.d("MainActivity","@Pause");
+        Toast.makeText(this, "The app is on pause", Toast.LENGTH_LONG).show();
+
+    }
+
+    protected void onStop() {
+        super.onStop();
+        Log.d("MainActivity","@Stop");
+        Toast.makeText(this, "The app was stopped", Toast.LENGTH_LONG).show();
+
+    }
+
+    protected void onDestroy() {
+        super.onDestroy();
+        Log.d("MainActivity","@Destroy");
+        Toast.makeText(this, "The app was destroyed", Toast.LENGTH_LONG).show();
+
+    }
+
+    private void makeUseOfNewLocation(Location location) {
+    }
+
 
     private void stopLocationUpdates() {
         tv_updates.setText("Location is Not being tracked");
@@ -134,7 +247,6 @@ public class MainActivity extends AppCompatActivity {
         tv_address.setText("Not tracking location");
 
         fusedLocationProviderClient.removeLocationUpdates(locationCallBack);
-
 
     }
 
@@ -207,7 +319,7 @@ public class MainActivity extends AppCompatActivity {
         // update alle Textviews mit den werten des Location-Objects
         tv_lat.setText(String.valueOf(location.getLatitude()));
         tv_lon.setText(String.valueOf(location.getLongitude()));
-        tv_accuracy.setText(String.valueOf(location.getAccuracy()));
+        tv_accuracy.setText(String.valueOf(location.getAccuracy()+ " m"));
 
         if(location.hasAltitude()){
             tv_altitude.setText(String.valueOf(location.getAltitude()));
@@ -218,7 +330,7 @@ public class MainActivity extends AppCompatActivity {
         }
 
         if(location.hasSpeed()){
-            tv_speed.setText(String.valueOf(location.getSpeed()));
+            tv_speed.setText(String.valueOf(location.getSpeed()+ " km/h"));
         }
         else{
             tv_speed.setText("Not avaible");
@@ -234,7 +346,6 @@ public class MainActivity extends AppCompatActivity {
         catch (Exception e){
             tv_address.setText("Unable to get address");
         }
-
 
     }
 
